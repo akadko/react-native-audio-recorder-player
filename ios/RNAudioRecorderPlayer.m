@@ -286,7 +286,8 @@ RCT_EXPORT_METHOD(startPlayer:(NSString*)path
             if ([path rangeOfString:@"file://"].location == NSNotFound) {
                 audioFileURL = [NSURL fileURLWithPath: [GetDirectoryOfType_Sound(NSCachesDirectory) stringByAppendingString:path]];
             } else {
-                audioFileURL = [NSURL URLWithString:path];
+                NSString *realPath = [path stringByReplacingOccurrencesOfString:@"file://" withString:@""];
+                audioFileURL = [NSURL fileURLWithPath:realPath];
             }
         }
 
