@@ -9,6 +9,7 @@
 #import <React/RCTLog.h>
 #import <React/RCTConvert.h>
 #import <AVFoundation/AVFoundation.h>
+#import "MobileVLCKit/MobileVLCKit.h"
 
 NSString* GetDirectoryOfType_Sound(NSSearchPathDirectory dir) {
   NSArray* paths = NSSearchPathForDirectoriesInDomains(dir, NSUserDomainMask, YES);
@@ -19,6 +20,7 @@ NSString* GetDirectoryOfType_Sound(NSSearchPathDirectory dir) {
   NSURL *audioFileURL;
   AVAudioRecorder *audioRecorder;
   AVAudioPlayer *audioPlayer;
+  VLCMediaPlayer *vlcPlayer;
   NSTimer *recordTimer;
   NSTimer *playTimer;
   BOOL _meteringEnabled;
@@ -27,7 +29,7 @@ double subscriptionDuration = 0.1;
 
 - (void)audioPlayerDidFinishPlaying:(AVAudioPlayer *)player successfully:(BOOL)flag {
   NSLog(@"audioPlayerDidFinishPlaying");
-  NSNumber *duration = [NSNumber numberWithDouble:audioPlayer.duration * 1000];
+  NSNumber *duration = [NSNumber numberWithDouble:vlcPlayer.time.intValue];
 
   // Send last event then finish it.
   // NSString* status = [NSString stringWithFormat:@"{\"duration\": \"%@\", \"current_position\": \"%@\"}", [duration stringValue], [currentTime stringValue]];
@@ -41,6 +43,26 @@ double subscriptionDuration = 0.1;
     playTimer = nil;
   }
 }
+
+- (void) mediaPlayerStateChanged:(NSNotification *)aNotification {
+  VLCMediaPlayer *player = [aNotification object];
+  if (player.state == VLCMediaPlayerStateEnded) {
+    NSLog(@"audioPlayerDidFinishPlaying");
+    NSNumber *duration = [NSNumber numberWithDouble:vlcPlayer.media.length.intValue];
+
+    // Send last event then finish it.
+    NSDictionary *status = @{
+                           @"duration" : [duration stringValue],
+                           @"current_position" : [duration stringValue],
+                           };
+    [self sendEventWithName:@"rn-playback" body: status];
+    if (playTimer != nil) {
+      [playTimer invalidate];
+      playTimer = nil;
+    }
+  }
+}
+
 
 - (void)updateRecorderProgress:(NSTimer*) timer
 {
@@ -61,18 +83,15 @@ double subscriptionDuration = 0.1;
 
 - (void)updateProgress:(NSTimer*) timer
 {
-  NSNumber *duration = [NSNumber numberWithDouble:audioPlayer.duration * 1000];
-  NSNumber *currentTime = [NSNumber numberWithDouble:audioPlayer.currentTime * 1000];
+  NSNumber *currentTime = vlcPlayer.time.value;
+  NSNumber *duration = vlcPlayer.media.length.value;
 
-  NSLog(@"updateProgress: %@", duration);
+  NSLog(@"updateProgress: %@", currentTime);
 
-  if ([duration intValue] == 0) {
-    [playTimer invalidate];
-    [audioPlayer stop];
+  if ([duration intValue] == 0 || currentTime == nil) {
     return;
   }
 
-  // NSString* status = [NSString stringWithFormat:@"{\"duration\": \"%@\", \"current_position\": \"%@\"}", [duration stringValue], [currentTime stringValue]];
   NSDictionary *status = @{
                          @"duration" : [duration stringValue],
                          @"current_position" : [currentTime stringValue],
@@ -245,7 +264,7 @@ RCT_EXPORT_METHOD(stopRecorder:(RCTPromiseResolveBlock)resolve
 RCT_EXPORT_METHOD(setVolume:(double) volume
                   resolve:(RCTPromiseResolveBlock) resolve
                   reject:(RCTPromiseRejectBlock) reject) {
-    [audioPlayer setVolume: volume];
+//    [audioPlayer setVolume: volume];
     resolve(@"setVolume");
 }
 
@@ -256,13 +275,19 @@ RCT_EXPORT_METHOD(startPlayer:(NSString*)path
     if ([[path substringToIndex:4] isEqualToString:@"http"]) {
         audioFileURL = [NSURL URLWithString:path];
 
-        NSURLSessionDataTask *downloadTask = [[NSURLSession sharedSession]
+      NSURLSessionConfiguration *conf = [NSURLSessionConfiguration defaultSessionConfiguration];
+      conf.requestCachePolicy = NSURLRequestReturnCacheDataElseLoad;
+      NSURLSession *session = [NSURLSession sessionWithConfiguration:conf];
+      
+        NSURLSessionDataTask *downloadTask = [session
         dataTaskWithURL:audioFileURL completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            // NSData *data = [NSData dataWithContentsOfURL:audioFileURL];
-            if (!audioPlayer) {
-                audioPlayer = [[AVAudioPlayer alloc] initWithData:data error:&error];
-                audioPlayer.delegate = self;
+//             NSData *data = [NSData dataWithContentsOfURL:audioFileURL];
+            if (!vlcPlayer) {
+              vlcPlayer = [[VLCMediaPlayer alloc] init];
+              vlcPlayer.delegate = self;
             }
+            VLCMedia *media = [[VLCMedia alloc] initWithStream:[[NSInputStream alloc] initWithData:data]];
+            vlcPlayer.media = media;
 
             // Able to play in silent mode
             [[AVAudioSession sharedInstance]
@@ -270,9 +295,11 @@ RCT_EXPORT_METHOD(startPlayer:(NSString*)path
                 error: &error];
             // Able to play in background
             [[AVAudioSession sharedInstance] setActive: YES error: nil];
-            [[UIApplication sharedApplication] beginReceivingRemoteControlEvents];
-
-            [audioPlayer play];
+            dispatch_async(dispatch_get_main_queue(), ^{
+              [[UIApplication sharedApplication] beginReceivingRemoteControlEvents];
+            });
+            
+            [vlcPlayer play];
             [self startPlayerTimer];
             NSString *filePath = audioFileURL.absoluteString;
             resolve(filePath);
@@ -291,21 +318,22 @@ RCT_EXPORT_METHOD(startPlayer:(NSString*)path
             }
         }
 
-        NSLog(@"Error %@",error);
-
-        if (!audioPlayer) {
+        if (!vlcPlayer) {
             RCTLogInfo(@"audio player alloc");
-            audioPlayer = [[AVAudioPlayer alloc] initWithContentsOfURL:audioFileURL error:nil];
-            audioPlayer.delegate = self;
+          vlcPlayer = [[VLCMediaPlayer alloc] init];
+          vlcPlayer.delegate = self;
         }
+
+        VLCMedia *media = [[VLCMedia alloc] initWithURL:audioFileURL];
+        vlcPlayer.media = media;
 
         // Able to play in silent mode
         [[AVAudioSession sharedInstance]
             setCategory: AVAudioSessionCategoryPlayback
-            error: nil];
+            error: &error];
 
         NSLog(@"Error %@",error);
-        [audioPlayer play];
+        [vlcPlayer play];
         [self startPlayerTimer];
 
         NSString *filePath = audioFileURL.absoluteString;
@@ -320,7 +348,7 @@ RCT_EXPORT_METHOD(resumePlayer: (RCTPromiseResolveBlock)resolve
         return;
     }
 
-    if (!audioPlayer) {
+    if (!vlcPlayer) {
         reject(@"audioRecorder resume", @"no audioPlayer", nil);
         return;
     }
@@ -328,7 +356,7 @@ RCT_EXPORT_METHOD(resumePlayer: (RCTPromiseResolveBlock)resolve
     [[AVAudioSession sharedInstance]
         setCategory: AVAudioSessionCategoryPlayback
         error: nil];
-    [audioPlayer play];
+    [vlcPlayer play];
     [self startPlayerTimer];
     NSString *filePath = audioFileURL.absoluteString;
     resolve(filePath);
@@ -337,8 +365,8 @@ RCT_EXPORT_METHOD(resumePlayer: (RCTPromiseResolveBlock)resolve
 RCT_EXPORT_METHOD(seekToPlayer: (nonnull NSNumber*) time
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
-    if (audioPlayer) {
-        audioPlayer.currentTime = [time doubleValue];
+    if (vlcPlayer) {
+      vlcPlayer.time = [[VLCTime alloc] initWithInt:(time.intValue * 1000)];
         resolve(@"seekTo");
     } else {
         reject(@"audioPlayer seekTo", @"audioPlayer is not set", nil);
@@ -348,8 +376,8 @@ RCT_EXPORT_METHOD(seekToPlayer: (nonnull NSNumber*) time
 RCT_EXPORT_METHOD(pausePlayer: (RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
     RCTLogInfo(@"pause");
-    if (audioPlayer && [audioPlayer isPlaying]) {
-        [audioPlayer pause];
+    if (vlcPlayer && [vlcPlayer isPlaying]) {
+        [vlcPlayer pause];
         if (playTimer != nil) {
             [playTimer invalidate];
             playTimer = nil;
@@ -363,13 +391,13 @@ RCT_EXPORT_METHOD(pausePlayer: (RCTPromiseResolveBlock)resolve
 
 RCT_EXPORT_METHOD(stopPlayer:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
-    if (audioPlayer) {
+    if (vlcPlayer) {
         if (playTimer != nil) {
             [playTimer invalidate];
             playTimer = nil;
         }
-        [audioPlayer stop];
-        audioPlayer = nil;
+        [vlcPlayer stop];
+        vlcPlayer = nil;
         resolve(@"stop play");
     } else {
         reject(@"audioPlayer stop", @"audioPlayer is not set", nil);
