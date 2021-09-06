@@ -222,7 +222,7 @@ RCT_EXPORT_METHOD(startRecorder:(NSString*)path
 
   // Setup audio session
   AVAudioSession *session = [AVAudioSession sharedInstance];
-  [session setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionAllowBluetooth error:nil];
+  [session setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionDefaultToSpeaker |  AVAudioSessionCategoryOptionAllowBluetoothA2DP error:nil];
 
   // set volume default to speaker
   UInt32 doChangeDefaultRoute = 1;
